@@ -724,6 +724,21 @@ textarea.inp { width:100%; }
 /* login */
 .login { max-width:380px; margin:12vh auto 0; }
 .login > .eyebrow { text-align:center; padding-top:30vh; }
+.pin-puntos { display:flex; justify-content:center; gap:16px; margin:22px 0 4px; }
+.pin-puntos span { width:16px; height:16px; border-radius:50%; border:2px solid #14162B; transition:background .1s; }
+.pin-puntos span.lleno { background:#14162B; }
+.pin-puntos.mal { animation:sacude .35s; }
+.pin-puntos.mal span { border-color:#B23A2E; }
+@keyframes sacude { 25% { transform:translateX(-8px); } 50% { transform:translateX(8px); } 75% { transform:translateX(-4px); } }
+.pin-err { min-height:20px; margin:6px 0 10px; text-align:center; }
+.pin-pad { display:grid; grid-template-columns:repeat(3, 76px); gap:14px 22px; justify-content:center; padding-bottom:6px; }
+.pin-k { width:76px; height:76px; border-radius:50%; border:1px solid var(--line); background:#fff; color:#14162B;
+         font-size:28px; font-weight:500; font-family:inherit; cursor:pointer; -webkit-tap-highlight-color:transparent;
+         touch-action:manipulation; user-select:none; padding:0; }
+.pin-k:active { background:#14162B; color:#fff; }
+.pin-k:disabled { opacity:.5; }
+.pin-borrar { border:none; background:none; font-size:24px; }
+.pin-borrar:active { background:#E6E8F2; color:#14162B; }
 
 /* piezas que solo existen en mobile */
 .solo-movil { display:none; }
@@ -813,6 +828,10 @@ const FIREBASE_CONFIG = {
   messagingSenderId: "388988736677",
   appId: "1:388988736677:web:71c8436d76148b915c294c"
 };
+/* Cuenta interna del dashboard: el usuario nunca la ve ni la escribe, solo toca el PIN.
+   En Firebase → Authentication → Users se crea un usuario con ESTE email y el PIN como contraseña. */
+const LOGIN_EMAIL = "gerente@mis-gastos.app";
+const PIN_LARGO = 6; // Firebase exige contraseñas de 6 caracteres o más
 /* ============================================================================ */
 
 const FB = (() => {
@@ -882,7 +901,6 @@ function DashboardGastos() {
   const [fbError, setFbError] = useState('');
   const [fbOpen, setFbOpen] = useState(false);
   const [fbListo, setFbListo] = useState(false);
-  const [loginEmail, setLoginEmail] = useState('');
   const [loginPass, setLoginPass] = useState('');
   const [entrando, setEntrando] = useState(false);
   const [aviso, setAviso] = useState('');
@@ -1159,9 +1177,9 @@ function DashboardGastos() {
 
   const explicar = e => {
     const c = e && (e.code || e.message) || '';
-    if (c.includes('auth/invalid-credential') || c.includes('auth/wrong-password') || c.includes('auth/invalid-login') || c.includes('auth/user-not-found')) return 'Email o contraseña incorrectos.';
-    if (c.includes('auth/too-many-requests')) return 'Demasiados intentos. Esperá unos minutos o restablecé la contraseña.';
-    if (c.includes('auth/invalid-email')) return 'El email no tiene un formato válido.';
+    if (c.includes('auth/invalid-credential') || c.includes('auth/wrong-password') || c.includes('auth/invalid-login') || c.includes('auth/user-not-found')) return 'PIN incorrecto. Probá de nuevo.';
+    if (c.includes('auth/too-many-requests')) return 'Demasiados intentos. Esperá unos minutos y probá de nuevo.';
+    if (c.includes('auth/invalid-email')) return 'Revisá LOGIN_EMAIL en el archivo.';
     if (c.includes('auth/missing-password')) return 'Ingresá la contraseña.';
     if (c.includes('auth/operation-not-allowed')) return 'Falta habilitar Email/Password en Authentication → Sign-in method.';
     if (c.includes('auth/unauthorized-domain')) return 'Agregá este dominio en Authentication → Settings → Authorized domains.';
@@ -1393,37 +1411,50 @@ function DashboardGastos() {
     return () => clearTimeout(escrituraRef.current);
   }, [gastos, cats, fbListo, usuario, catsTick]);
 
-  const entrar = async () => {
+  const entrar = async pin => {
+    const clave = typeof pin === 'string' ? pin : loginPass;
     setFbError('');
     setAviso('');
-    if (!loginEmail.trim() || !loginPass) {
-      setFbError('Completá email y contraseña.');
+    if (clave.length < PIN_LARGO) {
+      setFbError(`El PIN tiene ${PIN_LARGO} números.`);
       return;
     }
     setEntrando(true);
     try {
-      await FB.auth.signInWithEmailAndPassword(loginEmail.trim(), loginPass);
+      await FB.auth.signInWithEmailAndPassword(LOGIN_EMAIL, clave);
       setLoginPass('');
     } catch (e) {
+      setLoginPass('');
       setFbError(explicar(e));
     } finally {
       setEntrando(false);
     }
   };
-  const olvideClave = async () => {
-    setFbError('');
-    setAviso('');
-    if (!loginEmail.trim()) {
-      setFbError('Escribí tu email y volvé a tocar "Olvidé mi contraseña".');
+  const escribirPin = v => {
+    const d = v.replace(/\D/g, '').slice(0, PIN_LARGO);
+    setLoginPass(d);
+    if (fbError) setFbError('');
+    if (d.length === PIN_LARGO && !entrando) entrar(d);
+  };
+  const tocarPin = k => {
+    if (entrando) return;
+    if (k === 'borrar') {
+      setLoginPass(p => p.slice(0, -1));
+      if (fbError) setFbError('');
       return;
     }
-    try {
-      await FB.auth.sendPasswordResetEmail(loginEmail.trim());
-      setAviso('Te mandamos un mail para crear una contraseña nueva. Revisá también la carpeta de spam.');
-    } catch (e) {
-      setFbError(explicar(e));
-    }
+    if (loginPass.length >= PIN_LARGO) return;
+    escribirPin(loginPass + k);
   };
+  // en la compu también se puede tipear con el teclado físico
+  useEffect(() => {
+    if (!FB || usuario !== null) return;
+    const h = e => {
+      if (/^[0-9]$/.test(e.key)) tocarPin(e.key);else if (e.key === 'Backspace') tocarPin('borrar');
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  });
   const cerrarSesion = async () => {
     clearTimeout(escrituraRef.current);
     try {
@@ -1733,14 +1764,13 @@ function DashboardGastos() {
   }, "Cargando…")));
   if (FB && !usuario) return /*#__PURE__*/React.createElement("div", {
     className: "gx"
-  }, /*#__PURE__*/React.createElement("style", null, CSS), /*#__PURE__*/React.createElement("form", {
-    className: "login card",
-    onSubmit: e => {
-      e.preventDefault();
-      entrar();
-    }
+  }, /*#__PURE__*/React.createElement("style", null, CSS), /*#__PURE__*/React.createElement("div", {
+    className: "login card"
   }, /*#__PURE__*/React.createElement("div", {
-    className: "card-b"
+    className: "card-b",
+    style: {
+      textAlign: 'center'
+    }
   }, /*#__PURE__*/React.createElement("div", {
     className: "eyebrow"
   }, "Control de gastos"), /*#__PURE__*/React.createElement("h1", {
@@ -1752,55 +1782,32 @@ function DashboardGastos() {
   }, "Mis gastos"), /*#__PURE__*/React.createElement("div", {
     className: "hint",
     style: {
-      textAlign: 'left',
       marginTop: 0,
-      marginBottom: 18
+      textAlign: 'center'
     }
-  }, "Entrá con tu cuenta para ver y cargar tus gastos desde cualquier dispositivo."), /*#__PURE__*/React.createElement("div", {
-    className: "f-row"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "lb eyebrow"
-  }, "Email"), /*#__PURE__*/React.createElement("input", {
-    className: "inp",
-    type: "email",
-    autoComplete: "username",
-    inputMode: "email",
-    value: loginEmail,
-    onChange: e => setLoginEmail(e.target.value)
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "f-row"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "lb eyebrow"
-  }, "Contraseña"), /*#__PURE__*/React.createElement("input", {
-    className: "inp",
-    type: "password",
-    autoComplete: "current-password",
-    value: loginPass,
-    onChange: e => setLoginPass(e.target.value)
-  })), /*#__PURE__*/React.createElement("button", {
-    className: "cta",
-    type: "submit",
-    disabled: entrando,
-    style: {
-      marginTop: 6
-    }
-  }, entrando ? 'Entrando…' : 'Entrar'), fbError && /*#__PURE__*/React.createElement("div", {
-    className: "err"
-  }, fbError), aviso && /*#__PURE__*/React.createElement("div", {
-    className: "hint",
-    style: {
-      color: 'var(--usd)'
-    }
-  }, aviso), /*#__PURE__*/React.createElement("div", {
-    style: {
-      textAlign: 'center',
-      marginTop: 14
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    className: "lnk",
+  }, entrando ? 'Entrando…' : 'Ingresá tu PIN'), /*#__PURE__*/React.createElement("div", {
+    className: 'pin-puntos' + (fbError ? ' mal' : ''),
+    "aria-label": `PIN: ${loginPass.length} de ${PIN_LARGO}`
+  }, Array.from({
+    length: PIN_LARGO
+  }, (_, k) => /*#__PURE__*/React.createElement("span", {
+    key: k,
+    className: k < loginPass.length ? 'lleno' : ''
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "err pin-err",
+    role: "alert"
+  }, fbError || '\u00a0'), /*#__PURE__*/React.createElement("div", {
+    className: "pin-pad"
+  }, ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'borrar'].map((k, i) => k === '' ? /*#__PURE__*/React.createElement("span", {
+    key: i
+  }) : /*#__PURE__*/React.createElement("button", {
+    key: i,
     type: "button",
-    onClick: olvideClave
-  }, "Olvidé mi contraseña")))));
+    className: k === 'borrar' ? 'pin-k pin-borrar' : 'pin-k',
+    disabled: entrando,
+    "aria-label": k === 'borrar' ? 'Borrar' : k,
+    onClick: () => tocarPin(k)
+  }, k === 'borrar' ? '⌫' : k))))));
   return /*#__PURE__*/React.createElement("div", {
     className: "gx"
   }, /*#__PURE__*/React.createElement("style", null, CSS), !enLinea && /*#__PURE__*/React.createElement("div", {
